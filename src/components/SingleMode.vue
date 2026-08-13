@@ -5,7 +5,7 @@ import Pinyin from "../components/Pinyin.vue";
 import TypeSummary from "../components/TypeSummary.vue";
 import MenuList from "../components/MenuList.vue";
 
-import { onActivated, onDeactivated, ref, watchPostEffect } from "vue";
+import { onActivated, onDeactivated, ref, watch } from "vue";
 import { matchSpToPinyin } from "../utils/keyboard";
 import { playFeedback, speakHanzi, stopAudio } from "../utils/audio";
 import { useStore } from "../store";
@@ -33,8 +33,18 @@ const pinyin = ref<string[]>([]);
 
 const store = useStore();
 const props = defineProps<SingleModeProps>();
-const hanziSeq = ref(new Array(4).fill(0).map(() => nextChar()));
+const hanziSeq = ref<string[]>([]);
 const isValid = ref(false);
+
+/** 当前组件是否处于 keep-alive 激活状态。 */
+const isActive = ref(false);
+
+/** 用当前来源重建队列（4 个预览字 + 末尾目标）。 */
+function rebuildQueue() {
+  hanziSeq.value = new Array(4).fill(0).map(() => nextChar());
+}
+
+rebuildQueue();
 
 const summary = ref(new TypingSummary());
 
@@ -77,23 +87,34 @@ function onMenuChange(i: number) {
   }
 }
 
-watchPostEffect(() => {
-  for (let i = 0; i < 4; ++i) {
-    hanziSeq.value.unshift(nextChar());
-    hanziSeq.value.pop();
+/**
+ * 只监听真正需要重建队列的来源：Lead/Follow 的字表（菜单切换导致
+ * hanziList 变化时重建并朗读一次）。Random 无字表，来源恒为 undefined，
+ * 不会触发；也不再监听 hanziSeq 自身，advance 的单次 unshift/pop 不会
+ * 被再次重洗。
+ */
+watch(
+  () => props.hanziList,
+  () => {
+    rebuildQueue();
+    if (isActive.value) {
+      speakCurrent();
+    }
   }
-});
+);
 
 function onKeyPressed() {
   summary.value.onKeyPressed();
 }
 
 onActivated(() => {
+  isActive.value = true;
   document.addEventListener("keypress", onKeyPressed);
   speakCurrent();
 });
 
 onDeactivated(() => {
+  isActive.value = false;
   document.removeEventListener("keypress", onKeyPressed);
   clearAdvanceTimer();
   stopAudio();
@@ -132,9 +153,9 @@ function matchAnswers(lead: string, follow: string) {
 function onSeq([lead, follow]: [string?, string?]) {
   const fullInput = !!lead && !!follow;
 
-  // CP-11：正确输入后的 100ms 推进窗口内，任何完整提交一律吞掉——
-  // return true 让 Keyboard 清空缓冲；不反馈、不统计、不重排推进。
-  if (fullInput && advanceTimer !== null) {
+  // CP-11：100ms 推进窗口内的任何输入（含单键）一律吞掉——return true
+  // 让 Keyboard 清空缓冲；不反馈、不统计、不改变 pinyin/推进，避免残留。
+  if (advanceTimer !== null) {
     return true;
   }
 
@@ -177,25 +198,31 @@ function clearAdvanceTimer() {
   }
 }
 
-/** 朗读当前目标字（hanziSeq 末尾），不朗读预览队列。 */
-function speakCurrent() {
+/** 朗读指定字（遵守发音设置）；空字不读。 */
+function speakTarget(target: string) {
   if (!store.settings.enablePronunciation) {
     return;
   }
-  const target = hanziSeq.value.at(-1) ?? "";
   if (target === "") {
     return;
   }
   speakHanzi(target);
 }
 
+/** 朗读当前目标字（hanziSeq 末尾），不朗读预览队列。 */
+function speakCurrent() {
+  speakTarget(hanziSeq.value.at(-1) ?? "");
+}
+
 /** 正确输入后延迟 100ms 推进到新字，并朗读新目标一次。 */
 function advance() {
   hanziSeq.value.unshift(nextChar());
   hanziSeq.value.pop();
+  // 先取定新目标再朗读，保证朗读字与最终显示 at(-1) 一致。
+  const target = hanziSeq.value.at(-1) ?? "";
   pinyin.value = [];
   isValid.value = false;
-  speakCurrent();
+  speakTarget(target);
 }
 
 function scheduleAdvance() {
