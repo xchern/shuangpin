@@ -21,6 +21,9 @@ let pendingHanzi: string | null = null;
  */
 let deferredSpeakTimer: ReturnType<typeof setTimeout> | null = null;
 
+/** 单字朗读语速；略慢于系统默认值，以提高辨识度。 */
+const SPEECH_RATE = 0.78;
+
 /**
  * 真正执行 speak。直接路径与延迟回调共用；getVoices / speak 的任何
  * 异常均在此静默吞掉，保证不影响输入流程。
@@ -31,8 +34,10 @@ function doSpeak(
   text: string,
 ): void {
   try {
-    const utterance = new UtteranceCtor(text);
+    // 末尾逗号让语音引擎为孤立汉字增加自然停顿，避免连续朗读黏在一起。
+    const utterance = new UtteranceCtor(`${text}，`);
     utterance.lang = "zh-CN";
+    utterance.rate = SPEECH_RATE;
 
     // 可选：优先选用可用的中文 voice（不做任何 voiceschanged 全局监听，
     // 第一版仅依赖 utterance.lang 即可）。

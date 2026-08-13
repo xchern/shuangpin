@@ -319,17 +319,18 @@ describe("speakHanzi 朗读行为", () => {
     expect(synth.speak).not.toHaveBeenCalled();
     speakHanzi("好"); // 对照：非空汉字应正常朗读
     expect(synth.speak).toHaveBeenCalledTimes(1);
-    expect(synth.speak.mock.calls[0][0].text).toBe("好");
+    expect(synth.speak.mock.calls[0][0].text).toBe("好，");
   });
 
-  test("有效汉字使用 SpeechSynthesisUtterance，文本正确且 lang 为 zh-CN", () => {
+  test("有效汉字使用较慢语速，并以中文逗号产生自然停顿", () => {
     unlockAudio();
     speakHanzi("中");
     expect(synth.speak).toHaveBeenCalledTimes(1);
     const utterance = synth.speak.mock.calls[0][0];
     expect(utterance).toBeInstanceOf(MockSpeechSynthesisUtterance);
-    expect(utterance.text).toBe("中");
+    expect(utterance.text).toBe("中，");
     expect(utterance.lang).toBe("zh-CN");
+    expect(utterance.rate).toBe(0.78);
   });
 
   test("空闲时直接朗读；正在朗读时先 cancel 再延迟到下一宏任务（Chromium 竞态）", () => {
@@ -338,14 +339,14 @@ describe("speakHanzi 朗读行为", () => {
     speakHanzi("一");
     expect(synth.cancel).not.toHaveBeenCalled(); // 空闲路径不 cancel、不延迟
     expect(synth.speak).toHaveBeenCalledTimes(1);
-    expect(synth.speak.mock.calls[0][0].text).toBe("一");
+    expect(synth.speak.mock.calls[0][0].text).toBe("一，");
 
     speakHanzi("二"); // speaking 为真：先 cancel，延迟到下一宏任务
     expect(synth.cancel).toHaveBeenCalledTimes(1);
     expect(synth.speak).toHaveBeenCalledTimes(1); // 尚未同步 speak
     vi.advanceTimersByTime(0); // 触发下一宏任务
     expect(synth.speak).toHaveBeenCalledTimes(2);
-    expect(synth.speak.mock.calls[1][0].text).toBe("二");
+    expect(synth.speak.mock.calls[1][0].text).toBe("二，");
     // cancel 发生在延迟后的 speak 之前
     expect(synth.cancel.mock.invocationCallOrder[0]).toBeLessThan(
       synth.speak.mock.invocationCallOrder[1],
@@ -363,7 +364,7 @@ describe("speakHanzi 朗读行为", () => {
     expect(synth.cancel).toHaveBeenCalledTimes(2); // “二”“三”各 cancel 一次
     vi.advanceTimersByTime(0);
     expect(synth.speak).toHaveBeenCalledTimes(2); // 只补播最新“三”
-    expect(synth.speak.mock.calls[1][0].text).toBe("三");
+    expect(synth.speak.mock.calls[1][0].text).toBe("三，");
     vi.useRealTimers();
   });
 
@@ -375,7 +376,7 @@ describe("speakHanzi 朗读行为", () => {
     synth.speaking = false; // 模拟真实 Chromium 中 cancel 已异步生效
     speakHanzi("三"); // 此时空闲 → 直接播放，并取消旧延迟朗读
     expect(synth.speak).toHaveBeenCalledTimes(2); // “一”“三”
-    expect(synth.speak.mock.calls[1][0].text).toBe("三");
+    expect(synth.speak.mock.calls[1][0].text).toBe("三，");
     vi.advanceTimersByTime(0);
     expect(synth.speak).toHaveBeenCalledTimes(2); // 旧的“二”不再补播
     vi.useRealTimers();
@@ -389,7 +390,7 @@ describe("speakHanzi 朗读行为", () => {
     stopAudio(); // 应清理延迟定时器
     vi.advanceTimersByTime(0);
     expect(synth.speak).toHaveBeenCalledTimes(1); // 只有“一”
-    expect(synth.speak.mock.calls[0][0].text).toBe("一");
+    expect(synth.speak.mock.calls[0][0].text).toBe("一，");
     vi.useRealTimers();
   });
 });
@@ -401,7 +402,7 @@ describe("unlockAudio 待朗读队列", () => {
     expect(synth.speak).not.toHaveBeenCalled(); // 解锁前不朗读，只保留最新
     unlockAudio();
     expect(synth.speak).toHaveBeenCalledTimes(1); // 只播放最新一个
-    expect(synth.speak.mock.calls[0][0].text).toBe("乙");
+    expect(synth.speak.mock.calls[0][0].text).toBe("乙，");
   });
 });
 
