@@ -7,7 +7,7 @@ import MenuList from "../components/MenuList.vue";
 
 import { onActivated, onDeactivated, ref, watchPostEffect } from "vue";
 import { matchSpToPinyin } from "../utils/keyboard";
-import { speakHanzi, stopAudio } from "../utils/audio";
+import { playFeedback, speakHanzi, stopAudio } from "../utils/audio";
 import { useStore } from "../store";
 import { computed } from "vue";
 import { getPinyinOf } from "../utils/hanzi";
@@ -108,6 +108,14 @@ const hints = computed(() => {
   return (store.mode().py2sp.get(answer.value) ?? "").split("");
 });
 
+/**
+ * 上一次 onSeq 是否为完整两键提交；配合 lastFullPair 识别
+ * Keyboard 重复 send 的同一提交（反馈只播一次，统计仍与 CP-10 一致）。
+ */
+let lastSendWasFull = false;
+/** 上一次完整提交的双键；仅在 lastSendWasFull 为 true 时有意义。 */
+let lastFullPair: [string, string] | null = null;
+
 function onSeq([lead, follow]: [string?, string?]) {
   const res = matchSpToPinyin(
     store.mode(),
@@ -116,13 +124,17 @@ function onSeq([lead, follow]: [string?, string?]) {
     answer.value
   );
 
-  if (!!lead && !!follow) {
-    props.onValidInput?.(res.valid);
-    store.updateProgressOnValid(res.lead, res.follow, res.valid);
+  const fullInput = !!lead && !!follow;
+
+  // CP-11：当前目标已处于等待推进状态（正确输入后的 100ms 窗口内）时，
+  // 忽略后续完整提交——不反馈、不统计、不推进；不清理也不重排推进定时器。
+  if (fullInput && advanceTimer !== null) {
+    return res.valid;
   }
 
-  const fullInput = !!lead && !!follow;
   if (fullInput) {
+    props.onValidInput?.(res.valid);
+    store.updateProgressOnValid(res.lead, res.follow, res.valid);
     summary.value.onValid(res.valid);
   }
 
@@ -130,8 +142,26 @@ function onSeq([lead, follow]: [string?, string?]) {
 
   isValid.value = res.valid;
 
-  if (fullInput && res.valid) {
-    scheduleAdvance();
+  if (fullInput) {
+    // Keyboard 每次按键释放都会 send；同一完整提交被重复 send 时
+    // 不再重复反馈（统计照常，每次完整提交各记一次）。
+    const resend =
+      lastSendWasFull &&
+      lastFullPair !== null &&
+      lastFullPair[0] === lead &&
+      lastFullPair[1] === follow;
+    lastSendWasFull = true;
+    lastFullPair = [lead, follow];
+
+    if (store.settings.enableSoundFeedback && !resend) {
+      playFeedback(res.valid ? "correct" : "incorrect");
+    }
+
+    if (res.valid) {
+      scheduleAdvance();
+    }
+  } else {
+    lastSendWasFull = false;
   }
 
   return res.valid;
