@@ -7,6 +7,7 @@ import MenuList from "../components/MenuList.vue";
 
 import { onActivated, onDeactivated, ref, watchPostEffect } from "vue";
 import { matchSpToPinyin } from "../utils/keyboard";
+import { speakHanzi, stopAudio } from "../utils/audio";
 import { useStore } from "../store";
 import { computed } from "vue";
 import { getPinyinOf } from "../utils/hanzi";
@@ -89,10 +90,13 @@ function onKeyPressed() {
 
 onActivated(() => {
   document.addEventListener("keypress", onKeyPressed);
+  speakCurrent();
 });
 
 onDeactivated(() => {
   document.removeEventListener("keypress", onKeyPressed);
+  clearAdvanceTimer();
+  stopAudio();
 });
 
 const answer = computed(() => {
@@ -126,19 +130,51 @@ function onSeq([lead, follow]: [string?, string?]) {
 
   isValid.value = res.valid;
 
+  if (fullInput && res.valid) {
+    scheduleAdvance();
+  }
+
   return res.valid;
 }
 
-watchPostEffect(() => {
-  if (isValid.value) {
-    setTimeout(() => {
-      hanziSeq.value.unshift(nextChar());
-      hanziSeq.value.pop();
-      pinyin.value = [];
-      isValid.value = false;
-    }, 100);
+/** 尚未执行的推进定时器；停用页面时清除，避免停用后仍切字/朗读。 */
+let advanceTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearAdvanceTimer() {
+  if (advanceTimer !== null) {
+    clearTimeout(advanceTimer);
+    advanceTimer = null;
   }
-});
+}
+
+/** 朗读当前目标字（hanziSeq 末尾），不朗读预览队列。 */
+function speakCurrent() {
+  if (!store.settings.enablePronunciation) {
+    return;
+  }
+  const target = hanziSeq.value.at(-1) ?? "";
+  if (target === "") {
+    return;
+  }
+  speakHanzi(target);
+}
+
+/** 正确输入后延迟 100ms 推进到新字，并朗读新目标一次。 */
+function advance() {
+  hanziSeq.value.unshift(nextChar());
+  hanziSeq.value.pop();
+  pinyin.value = [];
+  isValid.value = false;
+  speakCurrent();
+}
+
+function scheduleAdvance() {
+  clearAdvanceTimer();
+  advanceTimer = setTimeout(() => {
+    advanceTimer = null;
+    advance();
+  }, 100);
+}
 </script>
 
 <template>
