@@ -142,8 +142,8 @@ export function speakHanzi(hanzi: string): void {
  * 反馈音配置：correct 为 880Hz 高音/短衰减，incorrect 为 330Hz 低音/长衰减。
  */
 const FEEDBACK_TONES: Record<FeedbackType, { frequency: number; duration: number; peak: number }> = {
-  correct: { frequency: 880, duration: 0.12, peak: 0.25 },
-  incorrect: { frequency: 330, duration: 0.35, peak: 0.2 },
+  correct: { frequency: 880, duration: 0.22, peak: 0.45 },
+  incorrect: { frequency: 330, duration: 0.45, peak: 0.35 },
 };
 
 /** Web Audio 上下文（惰性创建并复用；null 表示不可用）。 */

@@ -398,11 +398,11 @@ describe("speakHanzi 朗读行为", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     unlockAudio();
-    playFeedback("correct"); // 120ms 提示音 + 120ms 停顿
+    playFeedback("correct"); // 220ms 提示音 + 120ms 停顿
     speakHanzi("新");
 
     expect(synth.speak).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(239);
+    vi.advanceTimersByTime(339);
     expect(synth.speak).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
     expect(synth.speak).toHaveBeenCalledTimes(1);
@@ -495,7 +495,7 @@ describe("playFeedback 反馈音（Web Audio）", () => {
   });
 
   test("correct 与 incorrect 使用可观察到的不同频率与包络参数", () => {
-    // 约定值（供 CP-06 参考）：correct 880Hz / 短衰减，incorrect 330Hz / 长衰减。
+    // correct 使用较高频率和较短包络，incorrect 使用较低频率和较长包络。
     playFeedback("correct");
     playFeedback("incorrect");
     expect(createdContexts).toHaveLength(1);
@@ -512,6 +512,11 @@ describe("playFeedback 反馈音（Web Audio）", () => {
     expect(correctGain.gain.schedule.length).toBeGreaterThanOrEqual(2);
     expect(incorrectGain.gain.schedule.length).toBeGreaterThanOrEqual(2);
     expect(correctGain.gain.schedule).not.toEqual(incorrectGain.gain.schedule);
+    // 音量峰值与衰减时长保持在调优后的水平。
+    expect(correctGain.gain.schedule[1].args[0]).toBe(0.45);
+    expect(correctGain.gain.schedule.at(-1)?.args).toEqual([0.0001, 0.22]);
+    expect(incorrectGain.gain.schedule[1].args[0]).toBe(0.35);
+    expect(incorrectGain.gain.schedule.at(-1)?.args).toEqual([0.0001, 0.45]);
   });
 
   test("单次 playFeedback 只创建并启动一个 oscillator，并安排自然停止", () => {
