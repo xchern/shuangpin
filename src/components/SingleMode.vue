@@ -99,38 +99,50 @@ onDeactivated(() => {
   stopAudio();
 });
 
-const answer = computed(() => {
+/**
+ * 当前目标字的全部去重读音；完整提交时逐一匹配，任一命中即正确。
+ */
+const answers = computed(() => {
   const pys = getPinyinOf(hanziSeq.value.at(-1) ?? "");
-  return pys.at(0) ?? "";
+  return [...new Set(pys)];
 });
+
+const answer = computed(() => answers.value.at(0) ?? "");
 
 const hints = computed(() => {
   return (store.mode().py2sp.get(answer.value) ?? "").split("");
 });
 
 /**
- * 上一次 onSeq 是否为完整两键提交；配合 lastFullPair 识别
- * Keyboard 重复 send 的同一提交（反馈只播一次，统计仍与 CP-10 一致）。
+ * 对当前字全部去重读音逐一匹配；任一命中即返回该结果，
+ * 全部未命中时返回最后一次匹配结果（用于展示 lead/follow）。
  */
-let lastSendWasFull = false;
-/** 上一次完整提交的双键；仅在 lastSendWasFull 为 true 时有意义。 */
-let lastFullPair: [string, string] | null = null;
+function matchAnswers(lead: string, follow: string) {
+  let last: ReturnType<typeof matchSpToPinyin> | null = null;
+  for (const py of answers.value) {
+    const res = matchSpToPinyin(store.mode(), lead as Char, follow as Char, py);
+    if (res.valid) {
+      return res;
+    }
+    last = res;
+  }
+  return last ?? { valid: false, lead, follow };
+}
 
 function onSeq([lead, follow]: [string?, string?]) {
-  const res = matchSpToPinyin(
-    store.mode(),
-    lead as Char,
-    follow as Char,
-    answer.value
-  );
-
   const fullInput = !!lead && !!follow;
 
-  // CP-11：当前目标已处于等待推进状态（正确输入后的 100ms 窗口内）时，
-  // 忽略后续完整提交——不反馈、不统计、不推进；不清理也不重排推进定时器。
+  // CP-11：正确输入后的 100ms 推进窗口内，任何完整提交一律吞掉——
+  // return true 让 Keyboard 清空缓冲；不反馈、不统计、不重排推进。
   if (fullInput && advanceTimer !== null) {
-    return res.valid;
+    return true;
   }
+
+  // 完整提交按全部读音逐一匹配（任一命中即正确）；单键输入沿用
+  // 第一个读音做提示性匹配（与 hints 一致）。
+  const res = fullInput
+    ? matchAnswers(lead ?? "", follow ?? "")
+    : matchSpToPinyin(store.mode(), lead as Char, follow as Char, answer.value);
 
   if (fullInput) {
     props.onValidInput?.(res.valid);
@@ -143,25 +155,13 @@ function onSeq([lead, follow]: [string?, string?]) {
   isValid.value = res.valid;
 
   if (fullInput) {
-    // Keyboard 每次按键释放都会 send；同一完整提交被重复 send 时
-    // 不再重复反馈（统计照常，每次完整提交各记一次）。
-    const resend =
-      lastSendWasFull &&
-      lastFullPair !== null &&
-      lastFullPair[0] === lead &&
-      lastFullPair[1] === follow;
-    lastSendWasFull = true;
-    lastFullPair = [lead, follow];
-
-    if (store.settings.enableSoundFeedback && !resend) {
+    if (store.settings.enableSoundFeedback) {
       playFeedback(res.valid ? "correct" : "incorrect");
     }
 
     if (res.valid) {
       scheduleAdvance();
     }
-  } else {
-    lastSendWasFull = false;
   }
 
   return res.valid;
