@@ -393,6 +393,22 @@ describe("speakHanzi 朗读行为", () => {
     expect(synth.speak.mock.calls[0][0].text).toBe("一，");
     vi.useRealTimers();
   });
+
+  test("正确提示音结束后短暂停顿，再朗读新字", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    unlockAudio();
+    playFeedback("correct"); // 120ms 提示音 + 120ms 停顿
+    speakHanzi("新");
+
+    expect(synth.speak).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(239);
+    expect(synth.speak).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(synth.speak).toHaveBeenCalledTimes(1);
+    expect(synth.speak.mock.calls[0][0].text).toBe("新，");
+    vi.useRealTimers();
+  });
 });
 
 describe("unlockAudio 待朗读队列", () => {

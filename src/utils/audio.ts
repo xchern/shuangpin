@@ -24,6 +24,12 @@ let deferredSpeakTimer: ReturnType<typeof setTimeout> | null = null;
 /** 单字朗读语速；略慢于系统默认值，以提高辨识度。 */
 const SPEECH_RATE = 0.78;
 
+/** 提示音结束后到汉字朗读之间的短暂停顿。 */
+const POST_FEEDBACK_SPEECH_PAUSE_MS = 120;
+
+/** 下一次汉字朗读允许开始的最早时间。 */
+let speechNotBefore = 0;
+
 /**
  * 真正执行 speak。直接路径与延迟回调共用；getVoices / speak 的任何
  * 异常均在此静默吞掉，保证不影响输入流程。
@@ -73,23 +79,28 @@ function speakText(text: string): void {
       return;
     }
 
-    if (synth.speaking || synth.pending) {
-      if (deferredSpeakTimer !== null) {
-        clearTimeout(deferredSpeakTimer);
-      }
-      synth.cancel();
-      deferredSpeakTimer = setTimeout(() => {
-        deferredSpeakTimer = null;
-        doSpeak(synth, UtteranceCtor, text);
-      }, 0);
-      return;
-    }
+    const isBusy = synth.speaking || synth.pending;
+    const delay = Math.max(0, speechNotBefore - Date.now());
 
-    // 空闲直接播放；若仍有上一轮未触发的延迟朗读则一并取消，只播最新。
     if (deferredSpeakTimer !== null) {
       clearTimeout(deferredSpeakTimer);
       deferredSpeakTimer = null;
     }
+
+    if (isBusy) {
+      synth.cancel();
+    }
+
+    // 正在朗读时避开 Chromium cancel/speak 竞态；刚播放正确提示音时，
+    // 等提示音结束并短暂停顿后再读新字。快速连续调用只保留最新文本。
+    if (isBusy || delay > 0) {
+      deferredSpeakTimer = setTimeout(() => {
+        deferredSpeakTimer = null;
+        doSpeak(synth, UtteranceCtor, text);
+      }, delay);
+      return;
+    }
+
     doSpeak(synth, UtteranceCtor, text);
   } catch {
     // cancel 等异常均静默忽略，保证不影响输入流程。
@@ -252,6 +263,10 @@ export function playFeedback(type: FeedbackType): void {
     // 新反馈/stopAudio 的显式 stop 仍安全（重复 stop 抛错由 stopFeedbackNodes 兜底）。
     osc.stop(startTime + tone.duration + 0.05);
 
+    // 新目标字会在提示音之后出现；确保提示音完整结束，再留出短暂停顿。
+    speechNotBefore =
+      Date.now() + tone.duration * 1000 + POST_FEEDBACK_SPEECH_PAUSE_MS;
+
     activeOsc = osc;
     activeGain = gain;
   } catch {
@@ -264,6 +279,7 @@ export function playFeedback(type: FeedbackType): void {
  */
 export function stopAudio(): void {
   pendingHanzi = null;
+  speechNotBefore = 0;
   if (deferredSpeakTimer !== null) {
     clearTimeout(deferredSpeakTimer);
     deferredSpeakTimer = null;
