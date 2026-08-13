@@ -16,20 +16,21 @@ let audioUnlocked = false;
 let pendingHanzi: string | null = null;
 
 /**
- * 用语音合成朗读指定文本。
- * 先 cancel 旧朗读再 speak；若浏览器 API 缺失或抛错则静默 no-op。
+ * 因 Chromium cancel 竞态而推迟到下一宏任务执行的朗读定时器；
+ * null 表示无挂起的延迟朗读。快速连续调用会取消上一个定时器，只播最新。
  */
-function speakText(text: string): void {
+let deferredSpeakTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * 真正执行 speak。直接路径与延迟回调共用；getVoices / speak 的任何
+ * 异常均在此静默吞掉，保证不影响输入流程。
+ */
+function doSpeak(
+  synth: SpeechSynthesis,
+  UtteranceCtor: typeof SpeechSynthesisUtterance,
+  text: string,
+): void {
   try {
-    const synth = globalThis.speechSynthesis;
-    const UtteranceCtor = globalThis.SpeechSynthesisUtterance;
-    if (typeof synth === "undefined" || synth == null || typeof UtteranceCtor !== "function") {
-      return;
-    }
-
-    // 新朗读先取消进行中的旧朗读。
-    synth.cancel();
-
     const utterance = new UtteranceCtor(text);
     utterance.lang = "zh-CN";
 
@@ -50,9 +51,58 @@ function speakText(text: string): void {
   }
 }
 
+/**
+ * 用语音合成朗读指定文本。
+ *
+ * Chromium 的 cancel() 异步生效：在 speaking/pending 为真时先 cancel
+ * 再同步 speak，新 utterance 会被静默丢弃。因此这里在 speaking/pending
+ * 时先 cancel，并把最新朗读推迟到下一宏任务再 speak；快速连续调用会
+ * 取消上一个定时器，保证只播放最新一条。若空闲则直接 speak（并清理
+ * 可能仍挂起的旧延迟朗读，防止过期文本在最新朗读之后补播）。
+ */
+function speakText(text: string): void {
+  try {
+    const synth = globalThis.speechSynthesis;
+    const UtteranceCtor = globalThis.SpeechSynthesisUtterance;
+    if (typeof synth === "undefined" || synth == null || typeof UtteranceCtor !== "function") {
+      return;
+    }
+
+    if (synth.speaking || synth.pending) {
+      if (deferredSpeakTimer !== null) {
+        clearTimeout(deferredSpeakTimer);
+      }
+      synth.cancel();
+      deferredSpeakTimer = setTimeout(() => {
+        deferredSpeakTimer = null;
+        doSpeak(synth, UtteranceCtor, text);
+      }, 0);
+      return;
+    }
+
+    // 空闲直接播放；若仍有上一轮未触发的延迟朗读则一并取消，只播最新。
+    if (deferredSpeakTimer !== null) {
+      clearTimeout(deferredSpeakTimer);
+      deferredSpeakTimer = null;
+    }
+    doSpeak(synth, UtteranceCtor, text);
+  } catch {
+    // cancel 等异常均静默忽略，保证不影响输入流程。
+  }
+}
+
 /** 解锁音频（需由用户手势触发）。解锁后立即播放解锁前缓存的待朗读文本。 */
 export function unlockAudio(): void {
   audioUnlocked = true;
+
+  // iOS/WebKit：Web Audio 上下文必须在用户手势内创建并 resume 才能解锁，
+  // 否则首次 playFeedback（在 keypress 中惰性创建）会因脱离手势而无法发声。
+  // 这里在手势阶段惰性创建并恢复，后续 playFeedback 直接复用已解锁的上下文。
+  const ctx = getFeedbackContext();
+  if (ctx !== null) {
+    resumeContext(ctx);
+  }
+
   const text = pendingHanzi;
   if (text !== null) {
     pendingHanzi = null;
@@ -110,27 +160,58 @@ function getFeedbackContext(): AudioContext | null {
   }
 }
 
-/** 停止并断开当前反馈节点（如有）。任何异常静默忽略。 */
-function stopFeedbackNodes(): void {
+/**
+ * 恢复 suspended 的 Web Audio 上下文（须在用户手势内调用才可能生效）。
+ * resume 抛错或返回的 Promise 拒绝均静默忽略，不中断调用方。
+ */
+function resumeContext(ctx: AudioContext): void {
+  if (ctx.state !== "suspended") {
+    return;
+  }
   try {
-    if (activeOsc !== null) {
-      activeOsc.stop();
-      activeOsc.disconnect();
-      activeOsc = null;
-    }
-    if (activeGain !== null) {
-      activeGain.disconnect();
-      activeGain = null;
+    const p = ctx.resume();
+    if (p !== undefined && p !== null && typeof (p as Promise<void>).catch === "function") {
+      (p as Promise<void>).catch(() => {});
     }
   } catch {
-    // 节点停止/断开异常时静默忽略。
+    // resume 异常静默忽略，仍继续尝试播放。
+  }
+}
+
+/**
+ * 停止并断开当前反馈节点（如有）。
+ * 已按自然停止时间停过的节点再次 stop() 会抛 InvalidStateError，
+ * 这里对 stop / disconnect 分别容错，保证新反馈与 stopAudio 总能安全清理。
+ */
+function stopFeedbackNodes(): void {
+  if (activeOsc !== null) {
+    try {
+      activeOsc.stop();
+    } catch {
+      // 已自然停止的节点再次 stop 抛错，忽略后仍继续断开。
+    }
+    try {
+      activeOsc.disconnect();
+    } catch {
+      // 断开异常静默忽略。
+    }
+    activeOsc = null;
+  }
+  if (activeGain !== null) {
+    try {
+      activeGain.disconnect();
+    } catch {
+      // 断开异常静默忽略。
+    }
+    activeGain = null;
   }
 }
 
 /**
  * 播放正确/错误反馈音（Web Audio）。
  * 惰性创建并复用 AudioContext；suspended 时先 resume（异常与 Promise 拒绝静默）；
- * 新反馈开始前停止/断开旧节点；API 缺失或任何调用异常均安全 no-op。
+ * 新反馈开始前停止/断开旧节点；衰减结束后安排自然停止，避免振荡器无限运行；
+ * API 缺失或任何调用异常均安全 no-op。
  */
 export function playFeedback(type: FeedbackType): void {
   try {
@@ -139,17 +220,8 @@ export function playFeedback(type: FeedbackType): void {
       return; // 不支持 Web Audio 时安全 no-op
     }
 
-    // suspended 时先恢复上下文；resume 异常或 Promise 拒绝均静默忽略。
-    if (ctx.state === "suspended") {
-      try {
-        const p = ctx.resume();
-        if (p !== undefined && p !== null && typeof (p as Promise<void>).catch === "function") {
-          (p as Promise<void>).catch(() => {});
-        }
-      } catch {
-        // resume 异常静默忽略，仍继续尝试播放。
-      }
-    }
+    // suspended 时先恢复上下文（unlockAudio 已尽力在手势内恢复，这里兜底）。
+    resumeContext(ctx);
 
     // 新反馈开始前停止/断开旧反馈节点，避免排队与节点泄漏。
     stopFeedbackNodes();
@@ -171,6 +243,10 @@ export function playFeedback(type: FeedbackType): void {
     gain.connect(ctx.destination);
     osc.start(startTime);
 
+    // 衰减到接近静音后安排自然停止，避免振荡器无限运行；
+    // 新反馈/stopAudio 的显式 stop 仍安全（重复 stop 抛错由 stopFeedbackNodes 兜底）。
+    osc.stop(startTime + tone.duration + 0.05);
+
     activeOsc = osc;
     activeGain = gain;
   } catch {
@@ -178,9 +254,15 @@ export function playFeedback(type: FeedbackType): void {
   }
 }
 
-/** 停止所有音频：清除待朗读内容、取消进行中的朗读并停止当前反馈节点。 */
+/**
+ * 停止所有音频：清除待朗读内容与延迟朗读定时器、取消进行中的朗读并停止当前反馈节点。
+ */
 export function stopAudio(): void {
   pendingHanzi = null;
+  if (deferredSpeakTimer !== null) {
+    clearTimeout(deferredSpeakTimer);
+    deferredSpeakTimer = null;
+  }
   stopFeedbackNodes();
   try {
     globalThis.speechSynthesis?.cancel();
