@@ -18,7 +18,7 @@ import { storeToRefs } from "pinia";
 import rawArticles from "../utils/article.json";
 import { computed } from "vue";
 import { getPinyinOf, hanziMap } from "../utils/hanzi";
-import { speakHanzi, stopAudio } from "../utils/audio";
+import { playFeedback, speakHanzi, stopAudio } from "../utils/audio";
 import { matchSpToPinyin } from "../utils/keyboard";
 import { TypingSummary } from "../utils/summary";
 import MenuList from "../components/MenuList.vue";
@@ -191,7 +191,22 @@ function onAriticleChange(i: number) {
 const pinyin = ref<string[]>([]);
 const isValidPinyin = ref(false);
 
+type SeqMatch = ReturnType<typeof matchSpToPinyin>;
+
 function onSeq([lead, follow]: [string?, string?]) {
+  const fullInput = !!lead && !!follow;
+
+  // 正确后的 30ms 推进等待窗口：忽略后续完整提交，避免重复反馈与重复推进。
+  if (fullInput && advanceTimer !== null) {
+    return true;
+  }
+
+  // 本次输入的局部判定：任一读音匹配即为最终结果。
+  // 反馈/统计只依据该局部值，不使用跨调用残留的 isValidPinyin。
+  let matched = false;
+  let matchedRes: SeqMatch | null = null;
+  let lastRes: SeqMatch | null = null;
+
   for (const answer of article.value.answer) {
     const res = matchSpToPinyin(
       store.mode(),
@@ -199,23 +214,34 @@ function onSeq([lead, follow]: [string?, string?]) {
       follow as Char,
       answer
     );
-    pinyin.value = [res.lead, res.follow].filter((v) => !!v);
-
-    if (!!lead && !!follow) {
-      store.updateProgressOnValid(res.lead, res.follow, res.valid);
+    lastRes = res;
+    if (res.valid && !matched) {
+      matched = true;
+      matchedRes = res;
     }
-
-    isValidPinyin.value ||= res.valid;
-
-    if (isValidPinyin.value) break;
   }
 
-  const fullInput = !!lead && !!follow;
+  // 展示拼音：有匹配读音时用匹配项，否则用遍历的最终读音。
+  const finalRes = matchedRes ?? lastRes;
+  if (finalRes) {
+    pinyin.value = [finalRes.lead, finalRes.follow].filter((v) => !!v);
+  }
+
   if (fullInput) {
-    summary.value.onValid(isValidPinyin.value);
+    // 完整输入：基于最终/匹配结果只更新一次 progress 与 summary（多音字不重复统计）。
+    if (finalRes) {
+      store.updateProgressOnValid(finalRes.lead, finalRes.follow, matched);
+    }
+    summary.value.onValid(matched);
+
+    // 正确/错误反馈音：循环外只播放一次；正确音先于 30ms 推进与下一字朗读。
+    if (settings.value.enableSoundFeedback) {
+      playFeedback(matched ? "correct" : "incorrect");
+    }
   }
 
-  return isValidPinyin.value;
+  isValidPinyin.value = matched;
+  return matched;
 }
 
 function scrollToFocus() {
