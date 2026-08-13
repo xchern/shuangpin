@@ -191,18 +191,32 @@ function editConfig() {
   .settings {
     padding-top: 32px;
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 16px 32px;
+
+    @media (max-width: 576px) {
+      width: calc(100vw - 2 * var(--app-padding));
+      gap: 16px 8px;
+    }
   }
 
   .setting-item {
     display: flex;
     font-weight: bold;
     cursor: pointer;
+    white-space: nowrap;
+
+    @media (max-width: 576px) {
+      font-size: 12px;
+    }
 
     .setting-name {
       color: @primary-color;
       margin-right: 16px;
+
+      @media (max-width: 576px) {
+        margin-right: 6px;
+      }
     }
   }
 
