@@ -6,7 +6,9 @@ import { useRoute, useRouter } from "vue-router";
 import { useStore } from "./store";
 import { computed, watchPostEffect } from "vue";
 import { ref, effect } from "vue";
+import { onMounted, onUnmounted } from "vue";
 import { getPinyinOf } from "./utils/hanzi";
+import { unlockAudio } from "./utils/audio";
 
 const store = useStore();
 const router = useRouter();
@@ -52,6 +54,32 @@ const spMode = computed(() => {
 function onMenuChange(i: number) {
   router.push(routes[i]);
 }
+
+// CP-09：首次用户交互时解锁音频。
+const GESTURE_EVENTS = ["keydown", "pointerdown", "touchstart"] as const;
+
+function removeGestureListeners() {
+  for (const type of GESTURE_EVENTS) {
+    window.removeEventListener(type, unlockOnce);
+  }
+}
+
+function unlockOnce() {
+  unlockAudio();
+  removeGestureListeners();
+}
+
+onMounted(() => {
+  for (const type of GESTURE_EVENTS) {
+    window.addEventListener(
+      type,
+      unlockOnce,
+      type === "touchstart" ? { passive: true } : undefined
+    );
+  }
+});
+
+onUnmounted(removeGestureListeners);
 
 watchPostEffect(() => {
   const theme = store.settings.theme;
