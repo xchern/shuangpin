@@ -194,12 +194,14 @@ const isValidPinyin = ref(false);
 type SeqMatch = ReturnType<typeof matchSpToPinyin>;
 
 function onSeq([lead, follow]: [string?, string?]) {
-  const fullInput = !!lead && !!follow;
-
-  // 正确后的 30ms 推进等待窗口：忽略后续完整提交，避免重复反馈与重复推进。
-  if (fullInput && advanceTimer !== null) {
+  // 正确后的 30ms 推进等待窗口：忽略期间任何输入序列（含单键），
+  // 使 Keyboard 清空 keySeq，避免残留单键与下一目标/下一键错配。
+  // 仅返回 true，不更新 pinyin/isValidPinyin、统计、反馈，也不重排推进定时器。
+  if (advanceTimer !== null) {
     return true;
   }
+
+  const fullInput = !!lead && !!follow;
 
   // 本次输入的局部判定：任一读音匹配即为最终结果。
   // 反馈/统计只依据该局部值，不使用跨调用残留的 isValidPinyin。
