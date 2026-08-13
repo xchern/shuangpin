@@ -10,6 +10,7 @@ import {
   onDeactivated,
   onMounted,
   watchEffect,
+  watch,
 } from "vue";
 import { useStore } from "../store";
 import { storeToRefs } from "pinia";
@@ -17,6 +18,7 @@ import { storeToRefs } from "pinia";
 import rawArticles from "../utils/article.json";
 import { computed } from "vue";
 import { getPinyinOf, hanziMap } from "../utils/hanzi";
+import { speakHanzi, stopAudio } from "../utils/audio";
 import { matchSpToPinyin } from "../utils/keyboard";
 import { TypingSummary } from "../utils/summary";
 import MenuList from "../components/MenuList.vue";
@@ -26,6 +28,44 @@ const articles = storeToRefs(store).articles;
 const settings = storeToRefs(store).settings;
 
 const summary = ref(new TypingSummary());
+
+// CP-12：长句练习接入当前汉字朗读。
+// 推进定时器句柄（onDeactivated 时清除，避免停用后切字/朗读）。
+let advanceTimer: ReturnType<typeof setTimeout> | null = null;
+// 最近一次朗读的目标标识（文章名 + 有效下标），保证每个目标只朗读一次。
+let lastSpokenKey = "";
+
+function clearAdvanceTimer() {
+  if (advanceTimer !== null) {
+    clearTimeout(advanceTimer);
+    advanceTimer = null;
+  }
+}
+
+/** 朗读当前下划线汉字；force 用于激活/返回页面时强制朗读当前目标。 */
+function speakCurrentHanzi(force = false) {
+  if (!settings.value.enablePronunciation) return;
+  if (isEditing.value) return;
+
+  const key = `${article.value.name}:${article.value.progress.currentIndex}`;
+  if (!force && key === lastSpokenKey) return;
+
+  lastSpokenKey = key;
+  speakHanzi(article.value.currentHanzi);
+}
+
+/** 正确输入后的 30ms 推进：切到下一个有效汉字并朗读一次。 */
+function scheduleAdvance() {
+  clearAdvanceTimer();
+  advanceTimer = setTimeout(() => {
+    advanceTimer = null;
+    pinyin.value = [];
+    article.value.progress.currentIndex += 1;
+    isValidPinyin.value = false;
+    // 重新读取 article 会再次经过 jumpToNextValidHanzi，读到最终有效目标。
+    speakCurrentHanzi();
+  }, 30);
+}
 
 function onKeyPressed() {
   summary.value.onKeyPressed();
@@ -37,6 +77,8 @@ onActivated(() => {
 
 onDeactivated(() => {
   document.removeEventListener("keypress", onKeyPressed);
+  clearAdvanceTimer();
+  stopAudio();
 });
 
 (function checkArticles() {
@@ -187,17 +229,17 @@ function scrollToFocus() {
   }
 }
 
-onActivated(() => scrollToFocus());
+onActivated(() => {
+  scrollToFocus();
+  // 初次激活及从其他页面返回时朗读当前字。
+  speakCurrentHanzi(true);
+});
 
 watchPostEffect(() => {
   scrollToFocus();
 
   if (isValidPinyin.value) {
-    setTimeout(() => {
-      pinyin.value = [];
-      article.value.progress.currentIndex += 1;
-      isValidPinyin.value = false;
-    }, 30);
+    scheduleAdvance();
   }
 });
 
@@ -206,6 +248,13 @@ watchEffect(() => {
     article.value.progress.currentIndex = 0;
   }
 });
+
+// 受控监听：文章切换 / 文章结束重置 / 新建文章后朗读新目标；
+// 与推进路径共用 lastSpokenKey 去重，每个目标变化只朗读一次。
+watch(
+  () => `${article.value.name}:${article.value.progress.currentIndex}`,
+  () => speakCurrentHanzi()
+);
 
 function getShortName(s: string, n = 10) {
   let ret = s.slice(0, n);
