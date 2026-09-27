@@ -40,7 +40,7 @@ const settingOptions: {
   enableKeyHint: buildBooleanOption("键位提示"),
   enablePinyinHint: buildBooleanOption("拼音提示"),
   enablePronunciation: buildBooleanOption("汉字读音"),
-  enableSoundFeedback: buildBooleanOption("输入提示音"),
+  enableSoundFeedback: buildBooleanOption("对错提示音"),
   theme: {
     options: [
       { option: "auto", name: "自动" },
