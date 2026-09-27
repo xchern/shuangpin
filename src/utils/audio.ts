@@ -143,7 +143,7 @@ export function speakHanzi(hanzi: string): void {
  */
 const FEEDBACK_TONES: Record<FeedbackType, { frequency: number; duration: number; peak: number }> = {
   correct: { frequency: 880, duration: 0.22, peak: 0.45 },
-  incorrect: { frequency: 330, duration: 0.45, peak: 0.35 },
+  incorrect: { frequency: 330, duration: 0.45, peak: 0.6 },
 };
 
 /** Web Audio 上下文（惰性创建并复用；null 表示不可用）。 */
