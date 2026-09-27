@@ -3,11 +3,10 @@
 import { defineConfig } from "vite";
 import Vue from "@vitejs/plugin-vue";
 
-export default defineConfig(({ mode }) => ({
-  base: mode === "production" ? "/shuangpin/" : "/",
+export default defineConfig({
   plugins: [Vue()],
   test: {
     globals: true,
     environment: "jsdom",
   },
-}));
+});
